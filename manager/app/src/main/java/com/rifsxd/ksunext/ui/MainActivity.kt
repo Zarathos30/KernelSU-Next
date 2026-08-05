@@ -8,7 +8,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -39,6 +39,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.activity.viewModels
 import androidx.navigation.NavBackStackEntry
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.scale
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
@@ -189,7 +191,9 @@ fun Modifier.trackScroll(
     return this.nestedScroll(scrollConnection)
 }
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
+
+    private val appLockState = mutableStateOf(false)
 
     var zipUri by mutableStateOf<ArrayList<Uri>?>(null)
     enum class NavigateLocation { SUPERUSER, MODULES, SETTINGS }
@@ -239,7 +243,17 @@ class MainActivity : ComponentActivity() {
         if(intent != null)
             handleIntent(intent)
 
-        setContent {
+        val prefsInit = getSharedPreferences("settings", MODE_PRIVATE)
+        val requireBiometric = prefsInit.getBoolean("enable_biometric_lock", false)
+
+        if (savedInstanceState != null) {
+            appLockState.value = savedInstanceState.getBoolean("appLockState", requireBiometric)
+
+        } else {
+            appLockState.value = requireBiometric
+        }
+
+        setContent { Box(modifier = Modifier.fillMaxSize()) {
             KernelSUTheme(amoledMode = amoledModeState.value) {
                 val navController = rememberNavController()
                 val snackBarHostState = remember { SnackbarHostState() }
@@ -481,6 +495,56 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+
+            AppLockOverlay(amoledModeState.value)
+
+        } } // Box & setContent
+    } // onCreate
+
+    @Composable
+    private fun AppLockOverlay(amoledMode: Boolean) {
+        if (appLockState.value) {
+            KernelSUTheme(amoledMode = amoledMode) {
+                androidx.compose.material3.Surface(modifier = Modifier.fillMaxSize()) {
+                    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+                    var isPromptShowing by remember { mutableStateOf(false) }
+                    DisposableEffect(lifecycleOwner) {
+                        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                                val prefs = getSharedPreferences("settings", MODE_PRIVATE)
+                                val timeout = prefs.getLong("app_lock_timeout", 60000L)
+                                if (!com.rifsxd.ksunext.ui.util.AppLockManager.shouldPrompt(timeout)) {
+                                    appLockState.value = false
+                                    return@LifecycleEventObserver
+                                }
+
+                                if (!isPromptShowing) {
+                                    isPromptShowing = true
+                                    com.rifsxd.ksunext.ui.util.BiometricAuthenticator(this@MainActivity)
+                                        .authenticate(
+                                            title = getString(com.rifsxd.ksunext.R.string.app_name),
+                                            subtitle = getString(com.rifsxd.ksunext.R.string.biometric_prompt_subtitle),
+                                            onSuccess = {
+                                                isPromptShowing = false
+                                                appLockState.value = false
+                                                com.rifsxd.ksunext.ui.util.AppLockManager.unlock()
+                                            },
+                                            onError = {
+                                                isPromptShowing = false
+                                                Toast.makeText(this@MainActivity, "Auth failed: $it", Toast.LENGTH_SHORT).show()
+                                                finish()
+                                            }
+                                        )
+                                }
+                            }
+                        }
+                        lifecycleOwner.lifecycle.addObserver(observer)
+                        onDispose {
+                            lifecycleOwner.lifecycle.removeObserver(observer)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -492,10 +556,30 @@ class MainActivity : ComponentActivity() {
         amoledModeState.value = enabled
     }
 
+    override fun onStart() {
+        super.onStart()
+        com.rifsxd.ksunext.ui.util.AppLockManager.onActivityStart()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
         setIntent(intent)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        com.rifsxd.ksunext.ui.util.AppLockManager.onActivityStop()
+        val prefsInit = getSharedPreferences("settings", MODE_PRIVATE)
+        if (prefsInit.getBoolean("enable_biometric_lock", false)) {
+            appLockState.value = true
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean("appLockState", appLockState.value)
+
     }
 
     private fun handleIntent(intent: Intent) {
