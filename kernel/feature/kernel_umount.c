@@ -106,6 +106,7 @@ int ksu_handle_umount(uid_t old_uid, uid_t new_uid)
 		return 0;
 	}
 
+#ifndef CONFIG_KSU_SUSFS
 	// There are 6 scenarios:
 	// 1. Normal app: zygote -> appuid
 	// 2. Isolated process forked from zygote: zygote -> isolated_process
@@ -130,6 +131,8 @@ int ksu_handle_umount(uid_t old_uid, uid_t new_uid)
 		pr_info("handle umount ignore non zygote child: %d\n", current->pid);
 		return 0;
 	}
+#endif
+
 	// umount the target mnt
 	pr_info("handle umount for uid: %d, pid: %d\n", new_uid, current->pid);
 
@@ -148,7 +151,9 @@ int ksu_handle_umount(uid_t old_uid, uid_t new_uid)
 	return 0;
 }
 
-void __init ksu_kernel_umount_init(void)
+// kernel_umount: when a process is setuid, if it is an app, we umount all modules
+// for it.
+void __init ksu_kernel_umount_init()
 {
 	if (ksu_register_feature_handler(&kernel_umount_handler)) {
 		pr_err("Failed to register kernel_umount feature handler\n");
@@ -158,7 +163,7 @@ void __init ksu_kernel_umount_init(void)
 	}
 }
 
-void __exit ksu_kernel_umount_exit(void)
+void __exit ksu_kernel_umount_exit()
 {
 	ksu_unregister_feature_handler(KSU_FEATURE_WEBVIEW_ZYGOTE_UMOUNT);
 	ksu_unregister_feature_handler(KSU_FEATURE_KERNEL_UMOUNT);
